@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"fmt"
 	"github.com/joho/godotenv"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -12,52 +13,45 @@ import (
 // go get -u go.uber.org/zap
 // go get -u github.com/joho/godotenv
 
-// Logger 全局日志对象
-var Logger *zap.Logger
+var (
+	Logger       *zap.Logger
+	zapLogConfig = zap.NewProductionConfig()
+)
 
 func init() {
-	getLoggerEnv()
-	initLogger()
-	go checkLogFilePathUpdate()
+	newLogger()
 }
-
-// _loggerEnv 日志环境变量
-type _loggerEnv struct {
-	LogPath  string
-	LogLevel string
-}
-
-// loggerEnv 日志环境变量
-var loggerEnv = &_loggerEnv{}
-
-// 日志配置
-var zapLogConfig = zap.NewProductionConfig()
 
 // getLoggerEnv 设置日志环境变量
-func getLoggerEnv() {
+func getLoggerEnv() (string, string) {
 	err := godotenv.Load()
 	if err != nil {
 		//	创建.env文件
 		_, _ = os.Create(".env")
 	}
 	// LOG_FILE
-	loggerEnv.LogPath = os.Getenv("LOG_PATH")
-	if loggerEnv.LogPath == "" {
-		loggerEnv.LogPath = "logs"
-	}
+	logPath := os.Getenv("LOG_PATH")
 	// LOG_LEVEL
-	loggerEnv.LogLevel = os.Getenv("LOG_LEVEL")
-	if loggerEnv.LogLevel == "" {
-		loggerEnv.LogLevel = "info"
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel == "" {
+		logLevel = "info"
 	}
+	return logPath, logLevel
 }
 
-// initLogger 初始化日志对象
-func initLogger() {
-	zapLogConfig.OutputPaths = []string{getLogFilePath(), "stdout"} // 将日志输出到文件 和 标准输出
-	zapLogConfig.Encoding = "console"                               // 设置日志格 json console
+// newLogger 初始化日志对象
+func newLogger() *zap.Logger {
+	// 获取日志环境变量
+	logPath, logLevel := getLoggerEnv()
+	// 设置日志配置
+	if logPath == "" {
+		zapLogConfig.OutputPaths = []string{"stdout"} // 标准输出
+	} else {
+		zapLogConfig.OutputPaths = []string{getLogFilePath(logPath), "stdout"} // 将日志输出到文件 和 标准输出
+	}
+	zapLogConfig.Encoding = "console" // 设置日志格 json console
 	var LevelErr error
-	zapLogConfig.Level, LevelErr = zap.ParseAtomicLevel(loggerEnv.LogLevel) // 设置日志级别
+	zapLogConfig.Level, LevelErr = zap.ParseAtomicLevel(logLevel) // 设置日志级别
 	if LevelErr != nil {
 		zapLogConfig.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
 	}
@@ -70,37 +64,40 @@ func initLogger() {
 		CallerKey:    "caller",
 		EncodeCaller: zapcore.ShortCallerEncoder,
 	}
-	//zapLogConfig.Sampling = nil
-
 	// 创建Logger对象
 	var buildErr error
 	Logger, buildErr = zapLogConfig.Build()
 	if buildErr != nil {
-		panic("Failed to initialize logger: " + LevelErr.Error())
+		panic(fmt.Sprint("Failed to initialize logger: ", LevelErr))
 	}
 	// 在应用程序退出时调用以确保所有日志消息都被写入文件
 	defer func(Logger *zap.Logger) {
 		_ = Logger.Sync()
 	}(Logger)
+	// 检查日志文件路径是否需要更新
+	if logPath != "" {
+		go checkLogFilePathUpdate(logPath)
+	}
+	return Logger
 }
 
 // 函数以当前日期为基础创建日志文件路径
-func getLogFilePath() string {
+func getLogFilePath(path string) string {
 	today := time.Now().Format("2006-01-02")
-	filePath := filepath.Join(loggerEnv.LogPath, today)
+	filePath := filepath.Join(path, today)
 	// 创建日志文件夹
-	_ = os.MkdirAll(loggerEnv.LogPath, os.ModePerm)
+	_ = os.MkdirAll(path, os.ModePerm)
 	return filePath
 }
 
 // 更新日志文件路径
-func updateLogFilePath() {
-	zapLogConfig.OutputPaths = []string{getLogFilePath(), "stdout"}
-	initLogger()
+func updateLogFilePath(path string) {
+	zapLogConfig.OutputPaths = []string{getLogFilePath(path), "stdout"}
+	Logger = newLogger()
 }
 
 // 每秒检查一次日志文件路径是否需要更新
-func checkLogFilePathUpdate() {
+func checkLogFilePathUpdate(path string) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -108,7 +105,7 @@ func checkLogFilePathUpdate() {
 		case <-ticker.C:
 			// 检查是否需要更新日志文件路径
 			if time.Now().Format("2006-01-02") != filepath.Base(zapLogConfig.OutputPaths[0]) {
-				updateLogFilePath()
+				updateLogFilePath(path)
 			}
 		}
 	}
