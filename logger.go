@@ -16,40 +16,40 @@ import (
 var (
 	Logger       *zap.Logger
 	zapLogConfig = zap.NewProductionConfig()
-	logPath      string
-	logLevel     string
 )
 
 func init() {
-	initLogger()
+	newLogger()
 }
 
 // getLoggerEnv 设置日志环境变量
-func getLoggerEnv() {
+func getLoggerEnv() (string, string) {
 	err := godotenv.Load()
 	if err != nil {
 		//	创建.env文件
 		_, _ = os.Create(".env")
 	}
 	// LOG_FILE
-	logPath = os.Getenv("LOG_PATH")
-	if logPath == "" {
-		logPath = "logs"
-	}
+	logPath := os.Getenv("LOG_PATH")
 	// LOG_LEVEL
-	logLevel = os.Getenv("LOG_LEVEL")
+	logLevel := os.Getenv("LOG_LEVEL")
 	if logLevel == "" {
 		logLevel = "info"
 	}
+	return logPath, logLevel
 }
 
-// initLogger 初始化日志对象
-func initLogger() {
+// newLogger 初始化日志对象
+func newLogger() *zap.Logger {
 	// 获取日志环境变量
-	getLoggerEnv()
+	logPath, logLevel := getLoggerEnv()
 	// 设置日志配置
-	zapLogConfig.OutputPaths = []string{getLogFilePath(logPath), "stdout"} // 将日志输出到文件 和 标准输出
-	zapLogConfig.Encoding = "console"                                      // 设置日志格 json console
+	if logPath == "" {
+		zapLogConfig.OutputPaths = []string{"stdout"} // 标准输出
+	} else {
+		zapLogConfig.OutputPaths = []string{getLogFilePath(logPath), "stdout"} // 将日志输出到文件 和 标准输出
+	}
+	zapLogConfig.Encoding = "console" // 设置日志格 json console
 	var LevelErr error
 	zapLogConfig.Level, LevelErr = zap.ParseAtomicLevel(logLevel) // 设置日志级别
 	if LevelErr != nil {
@@ -74,7 +74,11 @@ func initLogger() {
 	defer func(Logger *zap.Logger) {
 		_ = Logger.Sync()
 	}(Logger)
-	go checkLogFilePathUpdate(logPath)
+	// 检查日志文件路径是否需要更新
+	if logPath != "" {
+		go checkLogFilePathUpdate(logPath)
+	}
+	return Logger
 }
 
 // 函数以当前日期为基础创建日志文件路径
@@ -89,7 +93,7 @@ func getLogFilePath(path string) string {
 // 更新日志文件路径
 func updateLogFilePath(path string) {
 	zapLogConfig.OutputPaths = []string{getLogFilePath(path), "stdout"}
-	initLogger()
+	Logger = newLogger()
 }
 
 // 每秒检查一次日志文件路径是否需要更新
